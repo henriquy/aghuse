@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parser AGHUSE — HC Unicamp</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f3;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:2rem 1rem}
+.card{background:#fff;border-radius:16px;border:1px solid rgba(0,0,0,0.08);padding:2rem;width:100%;max-width:860px}
+h1{font-size:20px;font-weight:500;color:#1a1a1a;margin-bottom:4px}
+.sub{font-size:13px;color:#666;margin-bottom:1.5rem}
+textarea{width:100%;border:1px solid #ddd;border-radius:10px;padding:12px;font-size:13px;font-family:'Menlo','Monaco',monospace;color:#1a1a1a;background:#fafafa;resize:vertical}
+textarea:focus{outline:none;border-color:#888}
+#inp{min-height:120px}
+#out{min-height:70px;margin-top:8px;background:#f5f5f3;border-color:#e0e0e0}
+.btn-row{display:flex;gap:8px;margin-top:10px}
+button{padding:8px 18px;border:1px solid #ccc;border-radius:8px;font-size:13px;cursor:pointer;background:#fff;color:#1a1a1a;transition:background 0.15s}
+button:hover{background:#f0f0ee}
+.primary{background:#1a6ef5!important;color:#fff!important;border-color:#1a6ef5!important}
+.primary:hover{background:#1558cc!important}
+.result{margin-top:1.5rem}
+.line-row{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #f0f0ee;align-items:baseline}
+.line-row:last-child{border-bottom:none}
+.dlabel{font-size:13px;font-weight:500;color:#555;min-width:110px;flex-shrink:0}
+.exline{font-size:14px;color:#1a1a1a;line-height:1.9;flex:1}
+.vsep{color:#bbb}
+.gtag{font-size:13px;font-weight:600;color:#1a6ef5;margin-right:4px}
+.outrow{display:flex;align-items:center;justify-content:space-between;margin-top:1.5rem;padding-top:1rem;border-top:1px solid #f0f0ee}
+.outrow span{font-size:12px;color:#999}
+.empty{color:#aaa;font-size:13px;padding:1.5rem 0;text-align:center}
+.footer{font-size:11px;color:#bbb;text-align:center;margin-top:1.5rem}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Parser AGHUSE — HC Unicamp</h1>
+  <p class="sub">Cole o texto copiado do AGHUSE. Resultado em linha por data, na ordem clínica.</p>
+  <textarea id="inp" placeholder="Cole aqui o texto copiado do AGHUSE (pode ser várias páginas de uma vez)..."></textarea>
+  <div class="btn-row">
+    <button class="primary" onclick="run()">Organizar</button>
+    <button onclick="reset()">Limpar</button>
+  </div>
+  <div class="result" id="res"><p class="empty">Nenhum resultado ainda.</p></div>
+  <div id="outbox" style="display:none">
+    <div class="outrow">
+      <span>Texto para prontuário</span>
+      <button onclick="cp()">Copiar</button>
+    </div>
+    <textarea id="out" readonly></textarea>
+  </div>
+  <p class="footer">HC Unicamp — uso interno</p>
+</div>
+
+<script>
+const GROUPS=[
+  {keys:['Hb','Ht','Leuco','Basto','Seg','Linf','Mono','Eos','Baso','Eritro','VCM','HCM','CHCM','RDW','PLT','VPM']},
+  {keys:['Cr','U','eTFG']},
+  {keys:['Na','K','Mg','Pi','Ca','Cl','Gli']},
+  {keys:['RNI','TTPa','R','Fibri','D-Di']},
+  {keys:['TGO','TGP','FA','GGT','BT','BD','BI','Alb','PT','Ami','Lip','LDH']},
+  {keys:['PCR','PCRus','PCT','VHS','IL-6','Ferr','Lac','Trop','BNP']},
+  {keys:['CT','LDL','HDL','TG','VLDL']},
+  {keys:['CEA','CA125','CA199','AFP','CA153','CA724','PSA','PSAl','B-HCG']},
+  {keys:['TSH','T4L','T3L','PepC','HbA1c','Ins','Cort','PTH','VitD','B12','Folato']},
+];
+const ORDER={};
+GROUPS.flatMap(g=>g.keys).forEach((k,i)=>ORDER[k]=i);
+
+const GASO_ORDER=['pH','pO2','pCO2','HCO3','BE','Lac','CaI'];
+const GASO_MAP={
+  'PH':'pH','pH':'pH',
+  'PO2':'pO2','pO2':'pO2',
+  'PCO2':'pCO2','pCO2':'pCO2',
+  'HCO3':'HCO3',
+  'BE':'BE',
+  'LACTATO':'Lac',
+  'CALCIO IONICO':'CaI','Ca IONICO':'CaI','CÁLCIO IÔNICO':'CaI','CALCIO IÔNICO':'CaI',
+};
+
+const MAP=[
+  [/^HB\s*$/i,'Hb'],[/^HEMOGLOBINA$/i,'Hb'],
+  [/^HT\s*$/i,'Ht'],[/^HEMATÓCRITO$/i,'Ht'],
+  [/^WBC$/i,'Leuco'],[/^LEUCÓCITOS$/i,'Leuco'],
+  [/^BASTÕES$/i,'Basto'],
+  [/^SEGMENTADOS$/i,'Seg'],[/^SEG$/i,'Seg'],
+  [/^LINFÓCITOS$/i,'Linf'],[/^LINFO$/i,'Linf'],
+  [/^MONÓCITOS$/i,'Mono'],[/^MONO$/i,'Mono'],
+  [/^EOSINÓFILOS$/i,'Eos'],[/^EOSINO$/i,'Eos'],
+  [/^BASÓFILOS$/i,'Baso'],[/^BASO$/i,'Baso'],
+  [/^PLT\s*$/i,'PLT'],[/^PLAQUETAS$/i,'PLT'],
+  [/^RBC$/i,'Eritro'],[/^ERITRÓCITOS$/i,'Eritro'],
+  [/^VCM$/i,'VCM'],[/^HCM$/i,'HCM'],[/^CHCM$/i,'CHCM'],
+  [/^RDW\s*$/i,'RDW'],[/^VPM\s*$/i,'VPM'],
+  [/^URÉIA$|^UREIA$/i,'U'],[/^CREATININA$/i,'Cr'],
+  [/ESTIMATIVA.*FILTRAÇÃO|^ETFG$/i,'eTFG'],
+  [/^SÓDIO$/i,'Na'],[/^POTÁSSIO$/i,'K'],
+  [/^MAGNÉSIO$/i,'Mg'],[/^FÓSFORO$|^FOSFATO$/i,'Pi'],
+  [/^CÁLCIO TOTAL$|^CÁLCIO$/i,'Ca'],
+  [/^CLORO$|^CLORETO$/i,'Cl'],
+  [/^GLICOSE$|^GLICEMIA$/i,'Gli'],
+  [/^INR$|RAZÃO NORMALIZADA/i,'RNI'],
+  [/TROMBOPLASTINA PARCIAL/i,'TTPa'],
+  [/^FIBRINOGÊNIO$/i,'Fibri'],[/DÍMERO.D/i,'D-Di'],
+  [/^TGO$|ASPARTATO AMINO|^AST$/i,'TGO'],
+  [/^TGP$|ALANINA AMINO|^ALT$/i,'TGP'],
+  [/FOSFATASE ALCALINA/i,'FA'],
+  [/GAMA.GLUTAMIL|^GAMA GT$/i,'GGT'],
+  [/BILIRRUBINAS? TOTAIS/i,'BT'],
+  [/BILIRRUBINA DIRETA/i,'BD'],[/BILIRRUBINA INDIRETA/i,'BI'],
+  [/^ALBUMINA$/i,'Alb'],[/PROTEÍNAS TOTAIS/i,'PT'],
+  [/^AMILASE$/i,'Ami'],[/^LIPASE$/i,'Lip'],[/LACTATO DESIDR/i,'LDH'],
+  [/^FERRITINA$/i,'Ferr'],[/^FERRO SÉRICO$|^FERRO$/i,'Fe'],
+  [/ÁCIDO ÚRICO/i,'AU'],
+  [/PROTEÍNA C REATIVA ULTRA/i,'PCRus'],
+  [/PROTEÍNA C REATIVA|^PCR$/i,'PCR'],
+  [/^PROCALCITONINA$/i,'PCT'],
+  [/VELOCIDADE.*HEMOSSEDIM|^VHS$/i,'VHS'],
+  [/^LACTATO$|ÁCIDO LÁCTICO/i,'Lac'],
+  [/^TROPONINA/i,'Trop'],[/^BNP$/i,'BNP'],[/NT.PROBNP/i,'NT-proBNP'],
+  [/INTERLEUCINA/i,'IL-6'],
+  [/COLESTEROL TOTAL/i,'CT'],[/COLESTEROL LDL/i,'LDL'],
+  [/COLESTEROL HDL/i,'HDL'],[/^VLDL/i,'VLDL'],
+  [/TRIGLICERÍDEOS|TRIGLICÉRIDES/i,'TG'],
+  [/^CA1$|ANTÍGENO CARBOIDRATO 125/i,'CA125'],
+  [/^C19-9$|ANTÍGENO CARBO.?HIDRATO 19/i,'CA199'],
+  [/^AFP$|ALFA.FETOPROTEÍNA/i,'AFP'],
+  [/^CEA$|ANTÍGENO CARCINOEMBRI/i,'CEA'],
+  [/^CA15|ANTÍGENO CARBOIDRATO 15/i,'CA153'],
+  [/^CA72|ANTÍGENO CARBOIDRATO 72/i,'CA724'],
+  [/^PSA$|ANTÍGENO PROSTÁTICO/i,'PSA'],
+  [/PSA LIVRE/i,'PSAl'],
+  [/^B.HCG$|GONADOTROFINA CORIÔNICA/i,'B-HCG'],
+  [/TIREOTROFINA|^TSH$/i,'TSH'],
+  [/TIROXINA LIVRE|^T4L$/i,'T4L'],
+  [/TRIIODOTIRONINA LIVRE|^T3L$/i,'T3L'],
+  [/PEPTÍDEO C|^CPE$/i,'PepC'],
+  [/HEMOGLOBINA GLIC/i,'HbA1c'],[/^INSULINA$/i,'Ins'],
+  [/^CORTISOL$/i,'Cort'],[/PARATORMÔNIO|^PTH$/i,'PTH'],
+  [/^HVD$|25.HIDRÓXI VITAMINA D|VITAMINA D/i,'VitD'],
+  [/^B12$|VITAMINA B12/i,'B12'],
+  [/ÁCIDO FÓLICO/i,'Folato'],
+];
+
+function getAbbr(n){for(const [re,ab] of MAP)if(re.test(n.trim()))return ab;return null;}
+function extractNum(raw){
+  const inf=raw.match(/INFERIOR\s+A\s+([0-9][0-9.,]*)/i);
+  if(inf)return '<'+inf[1];
+  const m=raw.match(/^(-?[<>]?\s*[0-9][0-9.,]*)/);
+  return m?m[1].trim():null;
+}
+function extractDif(raw){
+  const m=raw.match(/([0-9][0-9.,]*)\s*%\s*([0-9][0-9.,]*)/);
+  if(m)return m[2];
+  if(/^\s*%/.test(raw))return null;
+  return extractNum(raw);
+}
+
+function normalize(raw){
+  let t=raw;
+  if((t.match(/\n/g)||[]).length>5)return t;
+  const BREAKS=[
+    'Recebimento material:','Coleta do material:','Liberado em:',
+    'Material SANGUE ARTERIAL','Material SANGUE VENOSO','Material SANGUE',
+    'Material URINA','Material LCR','Material PLASMA',
+    'Método:','Método automatizado','Solicitação:','Impressão do Laudo:',
+    'LABORATÓRIO DE PATOLOGIA','GASOMETRIA ARTERIAL','GASOMETRIA VENOSA',
+    'Conferência por Vídeo',
+    'Valores de referência:','Valor de referência:','VALORES DE REFERENCIA:',
+    'INTERVALO DE REFERÊNCIA','Intervalo de Referência',
+    'Rua Rua Vital','CNPJ','email: null',
+    'Paciente:','Dr\\(a\\)','Origem:','Prontuário:','Convênio:',
+    'Chefe de Serviço:','OBS:',
+    'WBC:','RBC:','HB :','HB:','HT :','HT:','VCM:','HCM:','CHCM:',
+    'RDW :','RDW:','PLT :','PLT:','VPM :','VPM:','NRBC:',
+    'BASTÕES:','SEG:','LINFO:','MONO:','EOSINO:','BASO:',
+    'BLASTO:','PRÓ:','MIELO:','META:','ATIPCOS:','PLASMÓCITOS:',
+  ];
+  BREAKS.forEach(b=>{t=t.replace(new RegExp('('+b+')','gi'),'\n$1');});
+  t=t.replace(/([A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜ]{2,}(?:\s[A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜ]+)*:\s*[0-9])/g,'\n$1');
+  t=t.replace(/\b(PH|pO2|pCO2|HCO3|BE|sO2)\s+(-?[0-9])/gi,'\n$1 $2');
+  return t;
+}
+
+const DIFERENCIAIS={
+  'BASTÕES':'Basto','SEG':'Seg','SEGMENTADOS':'Seg',
+  'LINFO':'Linf','LINFÓCITOS':'Linf',
+  'MONO':'Mono','MONÓCITOS':'Mono',
+  'EOSINO':'Eos','EOSINÓFILOS':'Eos',
+  'BASO':'Baso','BASÓFILOS':'Baso',
+};
+
+const IGNORE=/^(LABORATÓRIO|CHEFE|BIOQUÍMICA|HEMATOLOGIA|FISIOLOGIA|GASOMETRIA$|IMUNOLOGIA|COAGULAÇÃO|Paciente:|Data de Nasc|Dr\(|Origem:|Prontuário:|Convênio:|Página|Impressão|"Todo|Rua |CNPJ|CNES|email:|homepage:|Conferência|Solicitação:|Material |Método|INTERVALO|Valores|Adulto|ADULTO|FEMININO|MASCULINO|Neonato|Criança|Prematuro|Recém|> 1 ano|1 dia|1 mês|6 dias|Risco |Equação|Percentil|Com Jejum|Sem Jejum|Desejável|Conforme|Atualizado|Revisado|Coleta do|Liberado|OBS:|BLASTO|PRÓ:|MIELO|META:|ATIPCO|PLASMÓ|NRBC|Não fumante|Fumante|Deficiência|Possível|Interferente|Obs\.:)/i;
+
+function run(){
+  const raw=document.getElementById('inp').value;
+  if(!raw.trim())return;
+  const text=normalize(raw);
+  const lines=text.split('\n').map(l=>l.trim()).filter(Boolean);
+
+  const lineGaso=new Array(lines.length).fill(null);
+  let curGaso=null;
+  for(let i=0;i<lines.length;i++){
+    if(/GASOMETRIA ARTERIAL/i.test(lines[i]))curGaso='A';
+    else if(/GASOMETRIA VENOSA/i.test(lines[i]))curGaso='V';
+    else if(/Recebimento material:/i.test(lines[i]))curGaso=null;
+    lineGaso[i]=curGaso;
+  }
+
+  const found=[];
+  const gasoFound=[];
+
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
+    if(!line||IGNORE.test(line))continue;
+    const gType=lineGaso[i];
+
+    if(gType){
+      const gm=line.match(/^([A-Za-zÀ-ÿ0-9\s]+?)\s+(-?[0-9][0-9.,]*)\s*/);
+      if(gm){
+        const gname=gm[1].trim().toUpperCase();
+        const gkey=GASO_MAP[gname];
+        if(gkey)gasoFound.push({type:gType,key:gkey,val:gm[2],lineIdx:i});
+      }
+      const em=line.match(/^([A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜ][A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜa-záéíóúãõâêîôûàçü\s]+?):\s*(-?[0-9][0-9.,]*)/);
+      if(em){
+        const gname=em[1].trim().toUpperCase();
+        const gkey=GASO_MAP[gname];
+        if(gkey)gasoFound.push({type:gType,key:gkey,val:em[2],lineIdx:i});
+      }
+      continue;
+    }
+
+    const difK=Object.keys(DIFERENCIAIS).join('|');
+    const difM=line.match(new RegExp('^('+difK+'):\\s*(.*)$','i'));
+    if(difM){
+      const ab=DIFERENCIAIS[difM[1].toUpperCase()];
+      if(ab){const v=extractDif(difM[2]);if(v)found.push({ab,val:v,lineIdx:i});}
+      continue;
+    }
+    const hm=line.match(/^(WBC|RBC|HB\s*|HT\s*|VCM|HCM|CHCM|RDW\s*|PLT\s*|VPM\s*):\s*(.+)$/i);
+    if(hm){
+      const ab=getAbbr(hm[1].trim().toUpperCase());
+      if(ab){const v=extractNum(hm[2]);if(v)found.push({ab,val:v,lineIdx:i});}
+      continue;
+    }
+    const em=line.match(/^([A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜ][A-ZÁÉÍÓÚÃÕÂÊÎÔÛÀÇÜa-záéíóúãõâêîôûàçü\s\-0-9]+?):\s*(.+)$/);
+    if(em){
+      const name=em[1].trim();
+      if(/INTERVALO|VALOR|ADULTO|REFERÊNCIA|SUGERIDO|JEJUM|RISCO|PERCENTIL|REVISADO|ATUALIZADO/i.test(name))continue;
+      if(name.split(' ').length>5)continue;
+      const ab=getAbbr(name);
+      if(!ab)continue;
+      const v=extractNum(em[2]);
+      if(v)found.push({ab,val:v,lineIdx:i});
+    }
+  }
+
+  function getDateTime(lineIdx){
+    for(let j=lineIdx+1;j<Math.min(lineIdx+60,lines.length);j++){
+      const c=lines[j].match(/Coleta do material:\s*(\d{2}\/\d{2}\/\d{2,4})\s+(\d{2}:\d{2})/i);
+      if(c)return{date:c[1],time:c[2]};
+      const r=lines[j].match(/Recebimento material:\s*(\d{2}\/\d{2}\/\d{2,4})\s+(\d{2}:\d{2})/i);
+      if(r)return{date:r[1],time:r[2]};
+      const r2=lines[j].match(/Recebimento material:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
+      if(r2)return{date:r2[1],time:null};
+    }
+    for(let j=lineIdx-1;j>=Math.max(0,lineIdx-60);j--){
+      const c=lines[j].match(/Coleta do material:\s*(\d{2}\/\d{2}\/\d{2,4})\s+(\d{2}:\d{2})/i);
+      if(c)return{date:c[1],time:c[2]};
+      const r=lines[j].match(/Recebimento material:\s*(\d{2}\/\d{2}\/\d{2,4})\s+(\d{2}:\d{2})/i);
+      if(r)return{date:r[1],time:r[2]};
+      const r2=lines[j].match(/Recebimento material:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
+      if(r2)return{date:r2[1],time:null};
+    }
+    return{date:'sem data',time:null};
+  }
+
+  const byDT={};
+  found.forEach(({ab,val,lineIdx})=>{
+    const{date,time}=getDateTime(lineIdx);
+    const k=date+'|'+(time||'');
+    if(!byDT[k])byDT[k]={date,time,exams:[]};
+    if(!byDT[k].exams.find(x=>x.ab===ab))byDT[k].exams.push({ab,val});
+  });
+
+  const gasoDT={};
+  gasoFound.forEach(({type,key,val,lineIdx})=>{
+    const{date,time}=getDateTime(lineIdx);
+    const k=date+'|'+(time||'')+'|'+type;
+    if(!gasoDT[k])gasoDT[k]={date,time,type,params:{}};
+    if(!gasoDT[k].params[key])gasoDT[k].params[key]=val;
+  });
+
+  const dateCountN={};
+  Object.values(byDT).forEach(({date})=>{dateCountN[date]=(dateCountN[date]||0)+1;});
+  const dateCountG={};
+  Object.values(gasoDT).forEach(({date})=>{dateCountG[date]=(dateCountG[date]||0)+1;});
+
+  const rows=[];
+  Object.values(byDT).forEach(({date,time,exams})=>{
+    const sorted=exams.slice().sort((a,b)=>(ORDER[a.ab]??999)-(ORDER[b.ab]??999));
+    const parts=sorted.map(x=>x.ab+' '+x.val);
+    const label=(dateCountN[date]>1&&time)?`${date} ${time}`:date;
+    rows.push({sk:parseDt(date)*1e6+(time?timeToMin(time):0),label,parts,isGaso:false});
+  });
+  Object.values(gasoDT).forEach(({date,time,type,params})=>{
+    const tag=type==='A'?'GasoA':'GasoV';
+    const parts=GASO_ORDER.filter(k=>params[k]!==undefined).map(k=>k+' '+params[k]);
+    const label=(dateCountG[date]>1&&time)?`${date} ${time}`:date;
+    rows.push({sk:parseDt(date)*1e6+(time?timeToMin(time):0)+0.5,label,parts,isGaso:true,tag});
+  });
+  rows.sort((a,b)=>a.sk-b.sk);
+
+  if(!rows.length){
+    document.getElementById('res').innerHTML='<p class="empty">Nenhum exame reconhecido.</p>';
+    return;
+  }
+
+  let html='',textLines=[];
+  rows.forEach(({label,parts,isGaso,tag})=>{
+    const prefix=isGaso?`<span class="gtag">${tag}:</span> `:'';
+    const tp=isGaso?tag+': ':'';
+    html+=`<div class="line-row"><span class="dlabel">${label}</span><span class="exline">${prefix}${parts.join(' <span class="vsep">|</span> ')}</span></div>`;
+    textLines.push(label+': '+tp+parts.join(' | '));
+  });
+
+  document.getElementById('res').innerHTML=html;
+  document.getElementById('out').value=textLines.join('\n');
+  document.getElementById('outbox').style.display='block';
+}
+
+function parseDt(s){
+  const p=s.split('/');if(p.length<3)return 0;
+  let y=parseInt(p[2]);if(y<100)y+=2000;
+  return new Date(y,parseInt(p[1])-1,parseInt(p[0])).getTime();
+}
+function timeToMin(t){
+  if(!t)return 0;const p=t.split(':');
+  return parseInt(p[0])*60+(parseInt(p[1])||0);
+}
+function reset(){
+  document.getElementById('inp').value='';
+  document.getElementById('res').innerHTML='<p class="empty">Nenhum resultado ainda.</p>';
+  document.getElementById('outbox').style.display='none';
+}
+function cp(){
+  const t=document.getElementById('out');
+  t.select();document.execCommand('copy');
+  const btn=event.target;
+  btn.textContent='Copiado!';
+  setTimeout(()=>btn.textContent='Copiar',2000);
+}
+</script>
+</body>
+</html>
